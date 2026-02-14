@@ -45,6 +45,7 @@ internal static partial class NativeMethods
     public const uint WS_EX_TOPMOST = 0x00000008;
     public const uint WS_EX_NOACTIVATE = 0x08000000;
     public const uint WS_EX_COMPOSITED = 0x02000000;
+    public const uint WS_EX_ACCEPTFILES = 0x00000010;
 
     // ─── Class Styles ──────────────────────────────────────────────────
     public const uint CS_HREDRAW = 0x0002;
@@ -175,18 +176,14 @@ internal static partial class NativeMethods
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public struct PAINTSTRUCT
+    public unsafe struct PAINTSTRUCT
     {
         public IntPtr hdc;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fErase;
+        public int fErase;
         public RECT rcPaint;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fRestore;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fIncUpdate;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] rgbReserved;
+        public int fRestore;
+        public int fIncUpdate;
+        public fixed byte rgbReserved[32];
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -199,7 +196,7 @@ internal static partial class NativeMethods
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct NOTIFYICONDATAW
+    public unsafe struct NOTIFYICONDATAW
     {
         public uint cbSize;
         public IntPtr hWnd;
@@ -207,15 +204,12 @@ internal static partial class NativeMethods
         public uint uFlags;
         public uint uCallbackMessage;
         public IntPtr hIcon;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string szTip;
+        public fixed char szTip[128];
         public uint dwState;
         public uint dwStateMask;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string szInfo;
+        public fixed char szInfo[256];
         public uint uVersion;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-        public string szInfoTitle;
+        public fixed char szInfoTitle[64];
         public uint dwInfoFlags;
         public Guid guidItem;
         public IntPtr hBalloonIcon;
@@ -584,11 +578,9 @@ internal static partial class NativeMethods
     public struct DWM_BLURBEHIND
     {
         public uint dwFlags;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fEnable;
+        public int fEnable;
         public IntPtr hRgnBlur;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fTransitionOnMaximized;
+        public int fTransitionOnMaximized;
     }
 
     public const uint DWM_BB_ENABLE = 0x00000001;
@@ -623,21 +615,55 @@ internal static partial class NativeMethods
         ref SHFILEINFOW psfi, uint cbSizeFileInfo, uint uFlags);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct SHFILEINFOW
+    public unsafe struct SHFILEINFOW
     {
         public IntPtr hIcon;
         public int iIcon;
         public uint dwAttributes;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szDisplayName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
-        public string szTypeName;
+        public fixed char szDisplayName[260];
+        public fixed char szTypeName[80];
     }
 
     public const uint SHGFI_ICON = 0x000000100;
     public const uint SHGFI_SMALLICON = 0x000000001;
     public const uint SHGFI_LARGEICON = 0x000000000;
     public const uint SHGFI_USEFILEATTRIBUTES = 0x000000010;
+    public const uint SHGFI_SYSICONINDEX = 0x000004000;
+
+    // ─── SHGetImageList (48px / 256px icons) ───────────────────────────
+    // SHIL_EXTRALARGE = 2 gives the 48x48 icon image list
+    public const int SHIL_LARGE = 0;
+    public const int SHIL_SMALL = 1;
+    public const int SHIL_EXTRALARGE = 2;
+    public const int SHIL_JUMBO = 4;
+
+    // IImageList GUID: {46EB5926-582E-4017-9FDF-E8998DAA0950}
+    public static readonly Guid IID_IImageList = new(0x46EB5926, 0x582E, 0x4017, 0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50);
+
+    [LibraryImport("shell32.dll")]
+    public static partial int SHGetImageList(int iImageList, ref Guid riid, out IntPtr ppvObj);
+
+    // IImageList::GetIcon is at vtable index 9
+    // We call it via raw COM vtable since we can't use ComImport with AOT
+    public const int ILD_TRANSPARENT = 0x00000001;
+
+    [LibraryImport("comctl32.dll")]
+    public static partial IntPtr ImageList_GetIcon(IntPtr himl, int i, uint flags);
+
+    // ─── Drag-and-Drop from Explorer ──────────────────────────────────
+    public const uint WM_DROPFILES = 0x0233;
+
+    [LibraryImport("shell32.dll")]
+    public static partial void DragAcceptFiles(IntPtr hWnd, int fAccept);
+
+    [LibraryImport("shell32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial uint DragQueryFileW(IntPtr hDrop, uint iFile, IntPtr lpszFile, uint cch);
+
+    [LibraryImport("shell32.dll")]
+    public static partial int DragQueryPoint(IntPtr hDrop, out POINT lppt);
+
+    [LibraryImport("shell32.dll")]
+    public static partial void DragFinish(IntPtr hDrop);
 
     // ─── Helpers ───────────────────────────────────────────────────────
 

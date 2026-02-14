@@ -33,7 +33,7 @@ internal sealed class TrayIcon : IDisposable
         _exitApp = exitApp;
     }
 
-    public void Create()
+    public unsafe void Create()
     {
         // Use shell32.dll icon index 35 (desktop icon) as tray icon
         _trayIconHandle = ExtractIconW(GetModuleHandleW(IntPtr.Zero), "shell32.dll", 35);
@@ -45,17 +45,20 @@ internal sealed class TrayIcon : IDisposable
 
         _nid = new NOTIFYICONDATAW
         {
-            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NOTIFYICONDATAW>(),
+            cbSize = (uint)sizeof(NOTIFYICONDATAW),
             hWnd = _hwnd,
             uID = 1,
             uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage = WM_TRAYICON,
             hIcon = _trayIconHandle,
-            szTip = "Desktop Fences",
-            szInfo = "",
-            szInfoTitle = "",
             uVersion = NOTIFYICON_VERSION_4
         };
+
+        // Copy tip text into fixed buffer
+        fixed (char* tip = _nid.szTip)
+        {
+            CopyStringToFixedBuffer(tip, 128, "Desktop Fences");
+        }
 
         Shell_NotifyIconW(NIM_ADD, ref _nid);
         Shell_NotifyIconW(NIM_SETVERSION, ref _nid);
@@ -136,5 +139,14 @@ internal sealed class TrayIcon : IDisposable
             DestroyIcon(_trayIconHandle);
             _trayIconHandle = IntPtr.Zero;
         }
+    }
+
+    /// <summary>Helper to copy a managed string into a fixed char buffer.</summary>
+    private static unsafe void CopyStringToFixedBuffer(char* buffer, int bufferSize, string text)
+    {
+        int len = Math.Min(text.Length, bufferSize - 1);
+        for (int i = 0; i < len; i++)
+            buffer[i] = text[i];
+        buffer[len] = '\0';
     }
 }

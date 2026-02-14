@@ -9,7 +9,7 @@ namespace DesktopFences.Core;
 /// No WinForms, no WPF, no XAML. Pure P/Invoke.
 /// Zero network connections.
 /// </summary>
-internal static class TextInputDialog
+internal static partial class TextInputDialog
 {
     private const string DialogClassName = "DFTextInputDlg";
     private const string EditClassName = "EDIT";
@@ -39,7 +39,7 @@ internal static class TextInputDialog
     private const uint WS_SYSMENU = 0x00080000;
     private const uint WS_OVERLAPPED = 0x00000000;
 
-    // SendMessage
+    // P/Invoke unique to this file (not shared in NativeMethods)
     [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
     private static partial IntPtr SendMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, string? lParam);
 
@@ -47,15 +47,16 @@ internal static class TextInputDialog
     private static partial IntPtr SendMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool EnableWindow(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool bEnable);
+    private static partial IntPtr EnableWindow(IntPtr hWnd, int bEnable);
 
     [LibraryImport("user32.dll")]
     private static partial IntPtr SetFocus(IntPtr hWnd);
 
     [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool IsDialogMessageW(IntPtr hDlg, ref MSG lpMsg);
+    private static partial int IsDialogMessageW(IntPtr hDlg, ref MSG lpMsg);
+
+    [LibraryImport("user32.dll")]
+    private static partial int IsWindow(IntPtr hWnd);
 
     public static string? Show(IntPtr owner, string title, string prompt, string defaultValue = "")
     {
@@ -128,15 +129,15 @@ internal static class TextInputDialog
         SendMessageW(_editHwnd, 0x00B1, IntPtr.Zero, new IntPtr(-1)); // EM_SETSEL
 
         // Disable owner
-        if (owner != IntPtr.Zero) EnableWindow(owner, false);
+        if (owner != IntPtr.Zero) EnableWindow(owner, 0); // FALSE
 
         // Modal message loop
         while (GetMessageW(out var msg, IntPtr.Zero, 0, 0))
         {
-            if (msg.message == WM_CLOSE || !IsWindow(_dialogHwnd))
+            if (msg.message == WM_CLOSE || IsWindow(_dialogHwnd) == 0)
                 break;
 
-            if (!IsDialogMessageW(_dialogHwnd, ref msg))
+            if (IsDialogMessageW(_dialogHwnd, ref msg) == 0)
             {
                 TranslateMessage(ref msg);
                 DispatchMessageW(ref msg);
@@ -144,15 +145,11 @@ internal static class TextInputDialog
         }
 
         // Re-enable owner
-        if (owner != IntPtr.Zero) EnableWindow(owner, true);
+        if (owner != IntPtr.Zero) EnableWindow(owner, 1); // TRUE
 
         DeleteObject(font);
         return _result;
     }
-
-    [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool IsWindow(IntPtr hWnd);
 
     private static IntPtr DlgWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
@@ -219,5 +216,4 @@ internal static class TextInputDialog
 
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
-
 }

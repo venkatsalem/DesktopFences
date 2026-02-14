@@ -84,6 +84,9 @@ internal sealed class OverlayWindow : IDisposable
         SetWindowPos(_hwnd, HWND_BOTTOM, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
+        // Accept drag-and-drop from Explorer
+        DragAcceptFiles(_hwnd, 1);
+
         // Sync registry state with config
         _config.StartWithWindows = RegistryStartup.IsStartWithWindows();
 
@@ -211,6 +214,10 @@ internal sealed class OverlayWindow : IDisposable
                 Redraw();
                 return IntPtr.Zero;
             }
+
+            case WM_DROPFILES:
+                _input?.OnDropFiles(wParam); // wParam is HDROP
+                return IntPtr.Zero;
 
             case WM_TRAYICON:
                 _tray?.HandleMessage(wParam, lParam);

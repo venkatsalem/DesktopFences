@@ -85,16 +85,16 @@ internal static class ConfigManager
                     Title = "Applications",
                     X = 50,
                     Y = 50,
-                    Width = 320,
-                    Height = 280
+                    Width = 380,
+                    Height = 340
                 },
                 new FenceData
                 {
                     Title = "Documents",
-                    X = 400,
+                    X = 460,
                     Y = 50,
-                    Width = 320,
-                    Height = 280
+                    Width = 380,
+                    Height = 340
                 }
             ]
         };

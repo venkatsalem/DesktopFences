@@ -42,10 +42,10 @@ public sealed class FenceData
     public int Y { get; set; }
 
     [JsonPropertyName("width")]
-    public int Width { get; set; } = 300;
+    public int Width { get; set; } = 380;
 
     [JsonPropertyName("height")]
-    public int Height { get; set; } = 250;
+    public int Height { get; set; } = 340;
 
     [JsonPropertyName("collapsed")]
     public bool Collapsed { get; set; }
@@ -55,7 +55,7 @@ public sealed class FenceData
 
     // Runtime-only
     [JsonIgnore]
-    public int ExpandedHeight { get; set; } = 250;
+    public int ExpandedHeight { get; set; } = 340;
 
     [JsonIgnore]
     public const int TitleBarHeight = 32;
@@ -64,10 +64,10 @@ public sealed class FenceData
     public const int CollapsedHeight = TitleBarHeight + 4;
 
     [JsonIgnore]
-    public const int IconSize = 32;
+    public const int IconSize = 48;
 
     [JsonIgnore]
-    public const int IconPadding = 8;
+    public const int IconPadding = 14;
 
     [JsonIgnore]
     public const int IconCellSize = IconSize + IconPadding * 2;

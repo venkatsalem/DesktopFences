@@ -178,17 +178,20 @@ internal sealed class Renderer : IDisposable
                 DrawRoundedRectFilled(ix, iy, FenceData.IconCellSize, FenceData.IconCellSize, 6, 0x40, 80, 120, 200);
             }
 
-            // Draw icon
+            // Draw icon centered in cell
+            int iconX = ix + (FenceData.IconCellSize - FenceData.IconSize) / 2;
+            int iconY = iy + 4;
+
             if (sc.CachedIcon != IntPtr.Zero)
             {
-                DrawIconEx(_memDC, ix + FenceData.IconPadding, iy + 2,
+                DrawIconEx(_memDC, iconX, iconY,
                     sc.CachedIcon, FenceData.IconSize, FenceData.IconSize,
                     0, IntPtr.Zero, DI_NORMAL);
             }
             else
             {
                 // Placeholder square
-                DrawRoundedRectFilled(ix + FenceData.IconPadding + 4, iy + 6,
+                DrawRoundedRectFilled(iconX + 4, iconY + 4,
                     FenceData.IconSize - 8, FenceData.IconSize - 8, 4, 0x80, 100, 100, 130);
             }
 
@@ -197,7 +200,7 @@ internal sealed class Renderer : IDisposable
             string name = TruncateText(sc.Name, FenceData.IconCellSize - 4);
             GetTextExtentPoint32W(_memDC, name, name.Length, out var textSize);
             int textX = ix + (FenceData.IconCellSize - textSize.cx) / 2;
-            DrawAlphaText(_memDC, name, textX, iy + FenceData.IconSize + 4, 0xD0, 200, 200, 210);
+            DrawAlphaText(_memDC, name, textX, iconY + FenceData.IconSize + 4, 0xD0, 200, 200, 210);
             SelectObject(_memDC, nameFont);
         }
 

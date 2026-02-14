@@ -38,9 +38,7 @@ internal sealed class InputHandler
     // Hover tracking
     private HitTestInfo? _currentHover;
 
-    // Double-click timing
-    private DateTime _lastClickTime;
-    private int _lastClickX, _lastClickY;
+    // (Double-click timing handled by CS_DBLCLKS window class style)
 
     public HitTestInfo? CurrentHover => _currentHover;
     public FenceData? EditingFence => _isEditingTitle ? _editingFence : null;
@@ -606,6 +604,74 @@ internal sealed class InputHandler
         }
     }
 
+    public void OnDropFiles(IntPtr hDrop)
+    {
+        // Get drop point (client coordinates)
+        DragQueryPoint(hDrop, out var pt);
+
+        // Find which fence the drop landed on
+        var hit = HitTest(pt.X, pt.Y);
+        FenceData? targetFence = hit.Fence;
+
+        // If not dropped on a fence, use the first fence or create one
+        if (targetFence == null)
+        {
+            if (_config.Fences.Count > 0)
+                targetFence = _config.Fences[0];
+            else
+            {
+                targetFence = new FenceData
+                {
+                    Title = "Dropped Items",
+                    X = Math.Max(0, pt.X - 150),
+                    Y = Math.Max(0, pt.Y - 20),
+                };
+                _config.Fences.Add(targetFence);
+            }
+        }
+
+        // Query how many files were dropped
+        uint fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, IntPtr.Zero, 0);
+
+        for (uint i = 0; i < fileCount; i++)
+        {
+            // Get required buffer size
+            uint len = DragQueryFileW(hDrop, i, IntPtr.Zero, 0);
+            if (len == 0) continue;
+
+            // Allocate buffer and get the file path
+            var buffer = new char[len + 1];
+            unsafe
+            {
+                fixed (char* p = buffer)
+                {
+                    DragQueryFileW(hDrop, i, (IntPtr)p, len + 1);
+                }
+            }
+            string path = new string(buffer, 0, (int)len);
+
+            // Determine type
+            bool isDir = Directory.Exists(path);
+            string type = isDir ? "folder" : "file";
+            string name = isDir
+                ? (Path.GetFileName(path) ?? path)
+                : Path.GetFileNameWithoutExtension(path);
+
+            var sc = new ShortcutItem
+            {
+                Name = name,
+                Target = path,
+                Type = type
+            };
+            LoadShortcutIcon(sc);
+            targetFence.Shortcuts.Add(sc);
+        }
+
+        DragFinish(hDrop);
+        _saveConfig();
+        _requestRedraw();
+    }
+
     public void LoadAllIcons()
     {
         foreach (var fence in _config.Fences)
@@ -625,15 +691,38 @@ internal sealed class InputHandler
         {
             if (sc.Type == "url")
             {
-                // Use shell32 default icon for URLs
-                sc.CachedIcon = ExtractIconW(IntPtr.Zero, "shell32.dll", 13);
+                // Try 48px image list for shell32 icon index 13
+                var urlIcon = GetExtraLargeIcon("shell32.dll", 13);
+                sc.CachedIcon = urlIcon != IntPtr.Zero ? urlIcon : ExtractIconW(IntPtr.Zero, "shell32.dll", 13);
                 return;
             }
 
             var target = sc.Target;
             if (!string.IsNullOrEmpty(target) && (File.Exists(target) || Directory.Exists(target)))
             {
+                // Get the system icon index for this file
                 var shfi = new SHFILEINFOW();
+                int result = SHGetFileInfoW(target, 0, ref shfi,
+                    (uint)System.Runtime.InteropServices.Marshal.SizeOf<SHFILEINFOW>(),
+                    SHGFI_SYSICONINDEX);
+
+                if (result != 0 && shfi.iIcon >= 0)
+                {
+                    // Get the 48px extra-large image list — native size, no scaling
+                    var iid = IID_IImageList;
+                    if (SHGetImageList(SHIL_EXTRALARGE, ref iid, out IntPtr imageList) == 0 && imageList != IntPtr.Zero)
+                    {
+                        var icon = ImageList_GetIcon(imageList, shfi.iIcon, ILD_TRANSPARENT);
+                        if (icon != IntPtr.Zero)
+                        {
+                            sc.CachedIcon = icon;
+                            return;
+                        }
+                    }
+                }
+
+                // Fallback: get 32px icon via SHGetFileInfoW (will be stretched)
+                shfi = new SHFILEINFOW();
                 SHGetFileInfoW(target, 0, ref shfi,
                     (uint)System.Runtime.InteropServices.Marshal.SizeOf<SHFILEINFOW>(),
                     SHGFI_ICON | SHGFI_LARGEICON);
@@ -645,14 +734,45 @@ internal sealed class InputHandler
                 }
             }
 
-            // Fallback: generic file icon
-            sc.CachedIcon = ExtractIconW(IntPtr.Zero, "shell32.dll",
-                sc.Type == "folder" ? 3 : 0);
+            // Fallback: generic file/folder icon
+            var fallbackIcon = GetExtraLargeIcon("shell32.dll", sc.Type == "folder" ? 3 : 0);
+            sc.CachedIcon = fallbackIcon != IntPtr.Zero
+                ? fallbackIcon
+                : ExtractIconW(IntPtr.Zero, "shell32.dll", sc.Type == "folder" ? 3 : 0);
         }
         catch
         {
             // Silently fail icon loading
         }
+    }
+
+    /// <summary>
+    /// Gets a 48px icon from shell32.dll by index using the extra-large system image list.
+    /// </summary>
+    private static IntPtr GetExtraLargeIcon(string dllPath, int index)
+    {
+        try
+        {
+            // First get the system icon index for this dll icon
+            var shfi = new SHFILEINFOW();
+            int result = SHGetFileInfoW(dllPath, 0, ref shfi,
+                (uint)System.Runtime.InteropServices.Marshal.SizeOf<SHFILEINFOW>(),
+                SHGFI_SYSICONINDEX);
+
+            // For shell32.dll icons, the icon index from ExtractIcon maps to the
+            // system image list. Use SHGetImageList directly.
+            var iid = IID_IImageList;
+            if (SHGetImageList(SHIL_EXTRALARGE, ref iid, out IntPtr imageList) == 0 && imageList != IntPtr.Zero)
+            {
+                if (result != 0)
+                {
+                    var icon = ImageList_GetIcon(imageList, shfi.iIcon, ILD_TRANSPARENT);
+                    if (icon != IntPtr.Zero) return icon;
+                }
+            }
+        }
+        catch { }
+        return IntPtr.Zero;
     }
 
     private static void LaunchShortcut(ShortcutItem sc)
