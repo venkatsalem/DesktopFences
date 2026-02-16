@@ -551,11 +551,23 @@ internal sealed class InputHandler
         var path = ShowOpenFileDialog("All Files\0*.*\0Executables\0*.exe;*.lnk\0\0");
         if (path != null)
         {
+            // Resolve .lnk to actual target
+            string resolvedPath = path;
+            if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = ResolveLnkTarget(path);
+                if (!string.IsNullOrEmpty(target))
+                    resolvedPath = target;
+            }
+
+            bool isDir = Directory.Exists(resolvedPath);
             var sc = new ShortcutItem
             {
-                Name = Path.GetFileNameWithoutExtension(path),
-                Target = path,
-                Type = "file"
+                Name = isDir
+                    ? (Path.GetFileName(resolvedPath) ?? resolvedPath)
+                    : Path.GetFileNameWithoutExtension(resolvedPath),
+                Target = resolvedPath,
+                Type = isDir ? "folder" : "file"
             };
             LoadShortcutIcon(sc);
             fence.Shortcuts.Add(sc);
@@ -612,6 +624,154 @@ internal sealed class InputHandler
             _saveConfig();
             _requestRedraw();
         }
+    }
+
+    /// <summary>
+    /// Resolves a .lnk shortcut file to its target path by parsing the binary format.
+    /// No COM, no reflection — pure binary parsing. AOT-safe.
+    /// </summary>
+    private static string? ResolveLnkTarget(string lnkPath)
+    {
+        try
+        {
+            var data = File.ReadAllBytes(lnkPath);
+            if (data.Length < 76) return null;
+
+            // Verify LNK header magic: 4C 00 00 00
+            if (data[0] != 0x4C || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00)
+                return null;
+
+            // LinkFlags at offset 0x14 (4 bytes, little-endian)
+            uint flags = BitConverter.ToUInt32(data, 0x14);
+            bool hasLinkTargetIdList = (flags & 0x01) != 0;
+            bool hasLinkInfo = (flags & 0x02) != 0;
+            bool hasStringData = (flags & 0x04) != 0; // HasName
+            bool hasRelativePath = (flags & 0x08) != 0; // HasRelativePath — unused here
+
+            int offset = 76; // end of ShellLinkHeader
+
+            // Skip LinkTargetIDList if present
+            if (hasLinkTargetIdList)
+            {
+                if (offset + 2 > data.Length) return null;
+                ushort idListSize = BitConverter.ToUInt16(data, offset);
+                offset += 2 + idListSize;
+            }
+
+            // Parse LinkInfo to get the local path
+            if (hasLinkInfo)
+            {
+                if (offset + 4 > data.Length) return null;
+                uint linkInfoSize = BitConverter.ToUInt32(data, offset);
+                if (linkInfoSize < 28 || offset + linkInfoSize > data.Length) return null;
+
+                int linkInfoStart = offset;
+                uint linkInfoHeaderSize = BitConverter.ToUInt32(data, linkInfoStart + 4);
+
+                // LinkInfoFlags at offset+8
+                uint linkInfoFlags = BitConverter.ToUInt32(data, linkInfoStart + 8);
+                bool volumeIdAndLocalBasePath = (linkInfoFlags & 0x01) != 0;
+
+                if (volumeIdAndLocalBasePath)
+                {
+                    // Try Unicode path first (available when header size >= 36)
+                    if (linkInfoHeaderSize >= 36)
+                    {
+                        uint unicodePathOffset = BitConverter.ToUInt32(data, linkInfoStart + 28);
+                        int uPathStart = linkInfoStart + (int)unicodePathOffset;
+                        if (uPathStart < data.Length)
+                        {
+                            string uTarget = ReadNullTerminatedUnicode(data, uPathStart);
+                            uTarget = ResolveGuidPath(uTarget);
+                            if (!string.IsNullOrEmpty(uTarget) && (File.Exists(uTarget) || Directory.Exists(uTarget)))
+                                return uTarget;
+                        }
+                    }
+
+                    // Fall back to ANSI path
+                    uint localBasePathOffset = BitConverter.ToUInt32(data, linkInfoStart + 16);
+                    int pathStart = linkInfoStart + (int)localBasePathOffset;
+
+                    // Read null-terminated ASCII string
+                    int pathEnd = pathStart;
+                    while (pathEnd < data.Length && data[pathEnd] != 0)
+                        pathEnd++;
+
+                    if (pathEnd > pathStart)
+                    {
+                        string target = System.Text.Encoding.Default.GetString(data, pathStart, pathEnd - pathStart);
+                        target = ResolveGuidPath(target);
+                        if (File.Exists(target) || Directory.Exists(target))
+                            return target;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Failed to parse — return null, caller will use original .lnk path
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Reads a null-terminated UTF-16LE string from a byte array.
+    /// </summary>
+    private static string ReadNullTerminatedUnicode(byte[] data, int offset)
+    {
+        int end = offset;
+        while (end + 1 < data.Length)
+        {
+            if (data[end] == 0 && data[end + 1] == 0) break;
+            end += 2;
+        }
+        if (end <= offset) return "";
+        return System.Text.Encoding.Unicode.GetString(data, offset, end - offset);
+    }
+
+    /// <summary>
+    /// Converts a Volume GUID path like "{6D809377-...}\Oracle\VirtualBox\VirtualBox.exe"
+    /// to a normal drive letter path like "C:\Program Files\Oracle\VirtualBox\VirtualBox.exe".
+    /// Scans all drive letters with common prefixes to find the actual file.
+    /// </summary>
+    private static string ResolveGuidPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+
+        // Check for patterns like {GUID}\rest or \\?\Volume{GUID}\rest
+        int guidStart = path.IndexOf('{');
+        if (guidStart < 0) return path;
+        int guidEnd = path.IndexOf('}', guidStart);
+        if (guidEnd < 0) return path;
+
+        // Extract the relative path after the GUID (skip any leading separator)
+        int afterGuid = guidEnd + 1;
+        if (afterGuid < path.Length && (path[afterGuid] == '\\' || path[afterGuid] == '/'))
+            afterGuid++;
+        if (afterGuid >= path.Length) return path;
+        string remainder = path[afterGuid..];
+
+        // Common prefixes to try (direct, Program Files, Program Files (x86), Users, etc.)
+        string[] prefixes = ["", "Program Files\\", "Program Files (x86)\\"];
+
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (!drive.IsReady) continue;
+                string root = drive.RootDirectory.FullName;
+
+                foreach (var prefix in prefixes)
+                {
+                    string candidate = Path.Combine(root, prefix + remainder);
+                    if (File.Exists(candidate) || Directory.Exists(candidate))
+                        return candidate;
+                }
+            }
+            catch { }
+        }
+
+        return path; // couldn't resolve, return original
     }
 
     private static string GetUrlDisplayName(string url)
@@ -675,17 +835,26 @@ internal sealed class InputHandler
             }
             string path = new string(buffer, 0, (int)len);
 
+            // Resolve .lnk shortcuts to their actual target
+            string resolvedPath = path;
+            if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = ResolveLnkTarget(path);
+                if (!string.IsNullOrEmpty(target))
+                    resolvedPath = target;
+            }
+
             // Determine type
-            bool isDir = Directory.Exists(path);
+            bool isDir = Directory.Exists(resolvedPath);
             string type = isDir ? "folder" : "file";
             string name = isDir
-                ? (Path.GetFileName(path) ?? path)
-                : Path.GetFileNameWithoutExtension(path);
+                ? (Path.GetFileName(resolvedPath) ?? resolvedPath)
+                : Path.GetFileNameWithoutExtension(resolvedPath);
 
             var sc = new ShortcutItem
             {
                 Name = name,
-                Target = path,
+                Target = resolvedPath,
                 Type = type
             };
             LoadShortcutIcon(sc);
