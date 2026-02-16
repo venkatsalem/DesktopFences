@@ -665,6 +665,42 @@ internal static partial class NativeMethods
     [LibraryImport("shell32.dll")]
     public static partial void DragFinish(IntPtr hDrop);
 
+    // ─── Icon pixel extraction ────────────────────────────────────────
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ICONINFO
+    {
+        public int fIcon;
+        public int xHotspot;
+        public int yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [LibraryImport("gdi32.dll")]
+    public static partial int GetObjectW(IntPtr h, int c, out BITMAP pv);
+
+    [LibraryImport("gdi32.dll")]
+    public static partial int GetDIBits(IntPtr hdc, IntPtr hbm, uint start, uint cLines,
+        IntPtr lpvBits, ref BITMAPINFO lpbmi, uint usage);
+
+    public const uint DIB_RGB_COLORS = 0;
+
     // ─── Helpers ───────────────────────────────────────────────────────
 
     public static int LOWORD(IntPtr lParam) => (short)(lParam.ToInt64() & 0xFFFF);

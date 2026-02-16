@@ -23,6 +23,7 @@ internal sealed class Renderer : IDisposable
     private IntPtr _titleFont;
     private IntPtr _itemFont;
     private IntPtr _smallFont;
+    private IntPtr _noteFont;
 
     // Cached brushes/pens
     private bool _resourcesCreated;
@@ -60,7 +61,8 @@ internal sealed class Renderer : IDisposable
         {
             _titleFont = CreateFontW(-16, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
             _itemFont = CreateFontW(-12, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
-            _smallFont = CreateFontW(-11, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
+            _smallFont = CreateFontW(-13, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
+            _noteFont = CreateFontW(-36, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI");
             _resourcesCreated = true;
         }
     }
@@ -116,17 +118,20 @@ internal sealed class Renderer : IDisposable
         bool isHovered = hover?.Fence == fence;
         bool isEditing = editingFence == fence;
 
-        // Draw fence background with rounded corners and semi-transparency
-        DrawRoundedRectFilled(x, y, w, h, radius, 0x40, 30, 30, 35); // dark semi-transparent
+        // Fence body background — subtle ~8% opaque dark fill
+        DrawRoundedRectFilled(x, y, w, h, radius, 0x14, 30, 30, 38);
 
-        // Draw border
+        // Border — always visible
         if (editMode && isHovered)
-            DrawRoundedRectOutline(x, y, w, h, radius, 0xA0, 100, 140, 255); // blue highlight
+            DrawRoundedRectOutline(x, y, w, h, radius, 0xC0, 100, 140, 255); // blue highlight
         else
-            DrawRoundedRectOutline(x, y, w, h, radius, 0x60, 80, 80, 90);
+            DrawRoundedRectOutline(x, y, w, h, radius, 0xB0, 120, 120, 135); // visible gray
 
-        // Title bar area
+        // Title bar background — same as original
         DrawRoundedRectFilled(x + 1, y + 1, w - 2, FenceData.TitleBarHeight, radius, 0x50, 40, 40, 48);
+
+        // Title underline
+        DrawHLine(x + 8, y + FenceData.TitleBarHeight, w - 16, 0x40, 100, 100, 110);
 
         // Title text
         var oldFont = SelectObject(_memDC, _titleFont);
@@ -142,15 +147,8 @@ internal sealed class Renderer : IDisposable
             titleText = fence.Title;
         }
 
-        // Collapse indicator
-        string indicator = fence.Collapsed ? " [+]" : " [-]";
-        var fullTitle = titleText + indicator;
-
-        DrawAlphaText(_memDC, fullTitle, x + 12, y + 7, 0xFF, 220, 220, 230);
+        DrawAlphaText(_memDC, titleText, x + 12, y + 7, 0xFF, 220, 220, 230);
         SelectObject(_memDC, oldFont);
-
-        // Title underline
-        DrawHLine(x + 8, y + FenceData.TitleBarHeight, w - 16, 0x40, 100, 100, 110);
 
         // If collapsed, don't draw shortcuts
         if (fence.Collapsed) return;
@@ -158,35 +156,34 @@ internal sealed class Renderer : IDisposable
         // Draw shortcuts
         int contentTop = y + FenceData.TitleBarHeight + 4;
         int contentLeft = x + FenceData.IconPadding;
-        int cols = Math.Max(1, (w - FenceData.IconPadding * 2) / FenceData.IconCellSize);
+        int cols = Math.Max(1, (w - FenceData.IconPadding * 2) / FenceData.IconCellWidth);
 
         for (int i = 0; i < fence.Shortcuts.Count; i++)
         {
             var sc = fence.Shortcuts[i];
             int col = i % cols;
             int row = i / cols;
-            int ix = contentLeft + col * FenceData.IconCellSize;
-            int iy = contentTop + row * FenceData.IconCellSize;
+            int ix = contentLeft + col * FenceData.IconCellWidth;
+            int iy = contentTop + row * FenceData.IconCellHeight;
 
-            if (iy + FenceData.IconCellSize > y + h) break; // clip
+            if (iy + FenceData.IconCellHeight > y + h) break; // clip
 
             bool scHovered = isHovered && hover?.ShortcutIndex == i;
 
             // Highlight hovered shortcut
             if (scHovered)
             {
-                DrawRoundedRectFilled(ix, iy, FenceData.IconCellSize, FenceData.IconCellSize, 6, 0x40, 80, 120, 200);
+                DrawRoundedRectFilled(ix, iy, FenceData.IconCellWidth, FenceData.IconCellHeight, 6, 0x40, 80, 120, 200);
             }
 
             // Draw icon centered in cell
-            int iconX = ix + (FenceData.IconCellSize - FenceData.IconSize) / 2;
+            int iconX = ix + (FenceData.IconCellWidth - FenceData.IconSize) / 2;
             int iconY = iy + 4;
 
             if (sc.CachedIcon != IntPtr.Zero)
             {
-                DrawIconEx(_memDC, iconX, iconY,
-                    sc.CachedIcon, FenceData.IconSize, FenceData.IconSize,
-                    0, IntPtr.Zero, DI_NORMAL);
+                // Use manual pixel compositing — DrawIconEx corrupts alpha on premultiplied DIBs
+                DrawIconManual(sc.CachedIcon, iconX, iconY, FenceData.IconSize, FenceData.IconSize);
             }
             else
             {
@@ -195,13 +192,31 @@ internal sealed class Renderer : IDisposable
                     FenceData.IconSize - 8, FenceData.IconSize - 8, 4, 0x80, 100, 100, 130);
             }
 
-            // Draw shortcut name below icon
+            // Draw shortcut name below icon — up to 2 lines with word wrap
             var nameFont = SelectObject(_memDC, _smallFont);
-            string name = TruncateText(sc.Name, FenceData.IconCellSize - 4);
-            GetTextExtentPoint32W(_memDC, name, name.Length, out var textSize);
-            int textX = ix + (FenceData.IconCellSize - textSize.cx) / 2;
-            DrawAlphaText(_memDC, name, textX, iconY + FenceData.IconSize + 4, 0xD0, 200, 200, 210);
+            int maxTextW = FenceData.IconCellWidth - 4;
+            int textTopY = iconY + FenceData.IconSize + 4;
+            DrawWrappedName(_memDC, sc.Name, ix + 2, textTopY, maxTextW, FenceData.IconCellWidth);
             SelectObject(_memDC, nameFont);
+        }
+
+        // Draw note text below shortcuts (or in body if no shortcuts)
+        if (!string.IsNullOrEmpty(fence.NoteText))
+        {
+            int noteTop;
+            if (fence.Shortcuts.Count > 0)
+            {
+                int totalRows = (fence.Shortcuts.Count + cols - 1) / cols;
+                noteTop = contentTop + totalRows * FenceData.IconCellHeight + 4;
+            }
+            else
+            {
+                noteTop = contentTop + 4;
+            }
+
+            var noteFont = SelectObject(_memDC, _noteFont);
+            DrawNoteText(fence.NoteText, x + 12, noteTop, w - 24, y + h - noteTop - 8);
+            SelectObject(_memDC, noteFont);
         }
 
         // Draw resize grip in bottom-right (if edit mode)
@@ -214,6 +229,171 @@ internal sealed class Renderer : IDisposable
                 SetPixelAlpha(gx + i * 4 + 4, gy + 4, 0x80, 150, 150, 160);
                 SetPixelAlpha(gx + 8, gy + i * 4, 0x80, 150, 150, 160);
             }
+        }
+    }
+
+    /// <summary>
+    /// Draws an icon by extracting its BGRA pixels via GetDIBits and compositing
+    /// them manually onto the DIB. This avoids DrawIconEx alpha corruption issues
+    /// on premultiplied-alpha surfaces.
+    /// </summary>
+    private void DrawIconManual(IntPtr hIcon, int destX, int destY, int drawW, int drawH)
+    {
+        if (!GetIconInfo(hIcon, out var iconInfo)) return;
+
+        try
+        {
+            // Get bitmap info
+            if (GetObjectW(iconInfo.hbmColor, Marshal.SizeOf<BITMAP>(), out var bmp) == 0)
+                return;
+
+            int iconW = bmp.bmWidth;
+            int iconH = bmp.bmHeight;
+            if (iconW <= 0 || iconH <= 0) return;
+
+            // Set up BITMAPINFO for GetDIBits — request bottom-up 32bpp
+            var bmi = new BITMAPINFO
+            {
+                bmiHeader = new BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = iconW,
+                    biHeight = -iconH, // top-down
+                    biPlanes = 1,
+                    biBitCount = 32,
+                    biCompression = 0
+                }
+            };
+
+            int pixelCount = iconW * iconH;
+            var pixels = new byte[pixelCount * 4];
+
+            unsafe
+            {
+                fixed (byte* pPixels = pixels)
+                {
+                    var hdc = CreateCompatibleDC(_screenDC);
+                    int result = GetDIBits(hdc, iconInfo.hbmColor, 0, (uint)iconH,
+                        (IntPtr)pPixels, ref bmi, DIB_RGB_COLORS);
+                    DeleteDC(hdc);
+
+                    if (result == 0) return;
+                }
+            }
+
+            // Check if the icon has any alpha (some old icons have all-zero alpha)
+            bool hasAlpha = false;
+            for (int i = 0; i < pixelCount; i++)
+            {
+                if (pixels[i * 4 + 3] != 0)
+                {
+                    hasAlpha = true;
+                    break;
+                }
+            }
+
+            // If no alpha channel, get the mask bitmap and use it
+            byte[]? maskPixels = null;
+            if (!hasAlpha && iconInfo.hbmMask != IntPtr.Zero)
+            {
+                var maskBmi = new BITMAPINFO
+                {
+                    bmiHeader = new BITMAPINFOHEADER
+                    {
+                        biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                        biWidth = iconW,
+                        biHeight = -iconH,
+                        biPlanes = 1,
+                        biBitCount = 32,
+                        biCompression = 0
+                    }
+                };
+
+                maskPixels = new byte[pixelCount * 4];
+                unsafe
+                {
+                    fixed (byte* pMask = maskPixels)
+                    {
+                        var hdc = CreateCompatibleDC(_screenDC);
+                        GetDIBits(hdc, iconInfo.hbmMask, 0, (uint)iconH,
+                            (IntPtr)pMask, ref maskBmi, DIB_RGB_COLORS);
+                        DeleteDC(hdc);
+                    }
+                }
+            }
+
+            // Composite onto the DIB
+            unsafe
+            {
+                byte* dstBits = (byte*)_bitmapBits;
+
+                for (int py = 0; py < iconH; py++)
+                {
+                    int absY = destY + py;
+                    if (absY < 0 || absY >= _height) continue;
+
+                    for (int px = 0; px < iconW; px++)
+                    {
+                        int absX = destX + px;
+                        if (absX < 0 || absX >= _width) continue;
+
+                        int srcOffset = (py * iconW + px) * 4;
+                        byte sb = pixels[srcOffset + 0]; // B
+                        byte sg = pixels[srcOffset + 1]; // G
+                        byte sr = pixels[srcOffset + 2]; // R
+                        byte sa = pixels[srcOffset + 3]; // A
+
+                        if (!hasAlpha)
+                        {
+                            // Use mask to determine alpha
+                            if (maskPixels != null)
+                            {
+                                byte maskVal = maskPixels[srcOffset]; // mask is white=transparent
+                                sa = (byte)(maskVal > 0 ? 0 : 255);
+                            }
+                            else
+                            {
+                                sa = (sr > 0 || sg > 0 || sb > 0) ? (byte)255 : (byte)0;
+                            }
+                        }
+
+                        if (sa == 0) continue; // fully transparent
+
+                        int dstOffset = (absY * _width + absX) * 4;
+
+                        // Premultiply source if it has alpha
+                        float srcAf = sa / 255.0f;
+                        byte premB = (byte)(sb * srcAf);
+                        byte premG = (byte)(sg * srcAf);
+                        byte premR = (byte)(sr * srcAf);
+
+                        // Source-over composite
+                        byte dstA = dstBits[dstOffset + 3];
+                        if (dstA == 0)
+                        {
+                            dstBits[dstOffset + 0] = premB;
+                            dstBits[dstOffset + 1] = premG;
+                            dstBits[dstOffset + 2] = premR;
+                            dstBits[dstOffset + 3] = sa;
+                        }
+                        else
+                        {
+                            float invSrcA = 1.0f - srcAf;
+                            dstBits[dstOffset + 0] = (byte)(premB + dstBits[dstOffset + 0] * invSrcA);
+                            dstBits[dstOffset + 1] = (byte)(premG + dstBits[dstOffset + 1] * invSrcA);
+                            dstBits[dstOffset + 2] = (byte)(premR + dstBits[dstOffset + 2] * invSrcA);
+                            float outA = srcAf + (dstA / 255.0f) * invSrcA;
+                            dstBits[dstOffset + 3] = (byte)(outA * 255);
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            // Clean up GDI objects from GetIconInfo
+            if (iconInfo.hbmColor != IntPtr.Zero) DeleteObject(iconInfo.hbmColor);
+            if (iconInfo.hbmMask != IntPtr.Zero) DeleteObject(iconInfo.hbmMask);
         }
     }
 
@@ -487,6 +667,138 @@ internal sealed class Renderer : IDisposable
         return ".";
     }
 
+    /// <summary>
+    /// Draws a shortcut name in up to 2 centered lines. If the text fits on one line, it is centered.
+    /// If it needs two lines, it breaks at the last space that fits, or mid-word if no space.
+    /// The second line is truncated with ".." if it still overflows.
+    /// </summary>
+    private void DrawWrappedName(IntPtr hdc, string name, int left, int topY, int maxWidth, int cellWidth)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+
+        GetTextExtentPoint32W(hdc, name, name.Length, out var fullSize);
+
+        // Fits on one line
+        if (fullSize.cx <= maxWidth)
+        {
+            int textX = left + (maxWidth - fullSize.cx) / 2;
+            DrawAlphaText(hdc, name, textX, topY, 0xD0, 200, 200, 210);
+            return;
+        }
+
+        // Find break point for first line — prefer breaking at a space
+        int breakIdx = -1;
+        for (int i = 1; i < name.Length; i++)
+        {
+            GetTextExtentPoint32W(hdc, name, i, out var partSize);
+            if (partSize.cx > maxWidth)
+            {
+                breakIdx = i - 1;
+                break;
+            }
+        }
+        if (breakIdx <= 0) breakIdx = 1;
+
+        // Try to break at last space before breakIdx
+        int spaceIdx = name.LastIndexOf(' ', breakIdx);
+        if (spaceIdx > 0)
+            breakIdx = spaceIdx;
+
+        string line1 = name[..breakIdx].TrimEnd();
+        string line2 = name[breakIdx..].TrimStart();
+
+        // Center line 1
+        GetTextExtentPoint32W(hdc, line1, line1.Length, out var size1);
+        int x1 = left + (maxWidth - size1.cx) / 2;
+        DrawAlphaText(hdc, line1, x1, topY, 0xD0, 200, 200, 210);
+
+        // Truncate line 2 if needed, then center it
+        string line2Display = TruncateText(line2, maxWidth);
+        GetTextExtentPoint32W(hdc, line2Display, line2Display.Length, out var size2);
+        int lineHeight = size1.cy + 1;
+        int x2 = left + (maxWidth - size2.cx) / 2;
+        DrawAlphaText(hdc, line2Display, x2, topY + lineHeight, 0xD0, 200, 200, 210);
+    }
+
+    /// <summary>
+    /// Renders multi-line note text with word wrapping within the given bounds.
+    /// </summary>
+    private void DrawNoteText(string text, int left, int top, int maxWidth, int maxHeight)
+    {
+        if (maxWidth <= 0 || maxHeight <= 0) return;
+
+        // Split by newlines first, then word-wrap each line
+        var lines = text.Split('\n');
+        int cursorY = top;
+
+        // Measure line height
+        GetTextExtentPoint32W(_memDC, "Ay", 2, out var measureSize);
+        int lineHeight = measureSize.cy + 2;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.TrimEnd('\r');
+
+            if (string.IsNullOrEmpty(line))
+            {
+                // Empty line — just advance
+                cursorY += lineHeight;
+                if (cursorY + lineHeight > top + maxHeight) break;
+                continue;
+            }
+
+            // Word-wrap this line
+            int start = 0;
+            while (start < line.Length)
+            {
+                if (cursorY + lineHeight > top + maxHeight) return; // out of space
+
+                // Find how many characters fit on this visual line
+                int fitLen = 0;
+                int lastSpace = -1;
+                for (int i = start; i < line.Length; i++)
+                {
+                    int segLen = i - start + 1;
+                    GetTextExtentPoint32W(_memDC, line.AsSpan(start, segLen).ToString(), segLen, out var segSize);
+                    if (segSize.cx > maxWidth)
+                        break;
+                    fitLen = segLen;
+                    if (line[i] == ' ')
+                        lastSpace = segLen;
+                }
+
+                if (fitLen == 0) fitLen = 1; // at least one char
+
+                int lineLen;
+                int nextStart;
+                if (start + fitLen >= line.Length)
+                {
+                    // Rest of the line fits
+                    lineLen = line.Length - start;
+                    nextStart = line.Length;
+                }
+                else if (lastSpace > 0)
+                {
+                    // Break at last space
+                    lineLen = lastSpace;
+                    nextStart = start + lastSpace; // skip past the space
+                }
+                else
+                {
+                    // No space — hard break
+                    lineLen = fitLen;
+                    nextStart = start + fitLen;
+                }
+
+                var segment = line.Substring(start, lineLen).TrimEnd();
+                DrawAlphaText(_memDC, segment, left, cursorY, 0xE0, 210, 210, 220);
+
+                cursorY += lineHeight;
+                start = nextStart;
+            }
+        }
+    }
+
     private void Cleanup()
     {
         if (_memDC != IntPtr.Zero && _oldBitmap != IntPtr.Zero)
@@ -511,6 +823,7 @@ internal sealed class Renderer : IDisposable
         if (_titleFont != IntPtr.Zero) { DeleteObject(_titleFont); _titleFont = IntPtr.Zero; }
         if (_itemFont != IntPtr.Zero) { DeleteObject(_itemFont); _itemFont = IntPtr.Zero; }
         if (_smallFont != IntPtr.Zero) { DeleteObject(_smallFont); _smallFont = IntPtr.Zero; }
+        if (_noteFont != IntPtr.Zero) { DeleteObject(_noteFont); _noteFont = IntPtr.Zero; }
     }
 }
 

@@ -53,6 +53,9 @@ public sealed class FenceData
     [JsonPropertyName("shortcuts")]
     public List<ShortcutItem> Shortcuts { get; set; } = [];
 
+    [JsonPropertyName("noteText")]
+    public string? NoteText { get; set; }
+
     // Runtime-only
     [JsonIgnore]
     public int ExpandedHeight { get; set; } = 340;
@@ -70,7 +73,10 @@ public sealed class FenceData
     public const int IconPadding = 14;
 
     [JsonIgnore]
-    public const int IconCellSize = IconSize + IconPadding * 2;
+    public const int IconCellWidth = IconSize + IconPadding * 2;
+
+    [JsonIgnore]
+    public const int IconCellHeight = IconSize + IconPadding * 2 + 16; // extra height for 2-line text
 
     /// <summary>Gets the actual display height considering collapsed state.</summary>
     [JsonIgnore]

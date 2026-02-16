@@ -106,17 +106,17 @@ internal sealed class InputHandler
             {
                 int contentTop = f.Y + FenceData.TitleBarHeight + 4;
                 int contentLeft = f.X + FenceData.IconPadding;
-                int cols = Math.Max(1, (f.Width - FenceData.IconPadding * 2) / FenceData.IconCellSize);
+                int cols = Math.Max(1, (f.Width - FenceData.IconPadding * 2) / FenceData.IconCellWidth);
 
                 for (int i = 0; i < f.Shortcuts.Count; i++)
                 {
                     int col = i % cols;
                     int row = i / cols;
-                    int ix = contentLeft + col * FenceData.IconCellSize;
-                    int iy = contentTop + row * FenceData.IconCellSize;
+                    int ix = contentLeft + col * FenceData.IconCellWidth;
+                    int iy = contentTop + row * FenceData.IconCellHeight;
 
-                    if (mx >= ix && mx < ix + FenceData.IconCellSize &&
-                        my >= iy && my < iy + FenceData.IconCellSize)
+                    if (mx >= ix && mx < ix + FenceData.IconCellWidth &&
+                        my >= iy && my < iy + FenceData.IconCellHeight)
                     {
                         result.Zone = HitZone.Shortcut;
                         result.ShortcutIndex = i;
@@ -373,6 +373,8 @@ internal sealed class InputHandler
         const nuint CMD_ADD_FOLDER = 5;
         const nuint CMD_ADD_URL = 6;
         const nuint CMD_REMOVE_SHORTCUT = 7;
+        const nuint CMD_EDIT_NOTE = 8;
+        const nuint CMD_CLEAR_NOTE = 9;
 
         InsertMenuW(menu, 0, MF_STRING, CMD_NEW_FENCE, "New Fence");
         InsertMenuW(menu, 1, MF_SEPARATOR, 0, null);
@@ -385,11 +387,15 @@ internal sealed class InputHandler
             InsertMenuW(menu, 5, MF_STRING, CMD_ADD_SHORTCUT, "Add File Shortcut...");
             InsertMenuW(menu, 6, MF_STRING, CMD_ADD_FOLDER, "Add Folder Shortcut...");
             InsertMenuW(menu, 7, MF_STRING, CMD_ADD_URL, "Add URL Shortcut...");
+            InsertMenuW(menu, 8, MF_SEPARATOR, 0, null);
+            InsertMenuW(menu, 9, MF_STRING, CMD_EDIT_NOTE, "Edit Note...");
+            if (!string.IsNullOrEmpty(hit.Fence.NoteText))
+                InsertMenuW(menu, 10, MF_STRING, CMD_CLEAR_NOTE, "Clear Note");
 
             if (hit.Zone == HitZone.Shortcut && hit.ShortcutIndex >= 0)
             {
-                InsertMenuW(menu, 8, MF_SEPARATOR, 0, null);
-                InsertMenuW(menu, 9, MF_STRING, CMD_REMOVE_SHORTCUT, "Remove Shortcut");
+                InsertMenuW(menu, 11, MF_SEPARATOR, 0, null);
+                InsertMenuW(menu, 12, MF_STRING, CMD_REMOVE_SHORTCUT, "Remove Shortcut");
             }
         }
 
@@ -425,6 +431,14 @@ internal sealed class InputHandler
                 break;
             case CMD_ADD_URL when hit.Fence != null:
                 AddUrlShortcut(hit.Fence);
+                break;
+            case CMD_EDIT_NOTE when hit.Fence != null:
+                EditFenceNote(hit.Fence);
+                break;
+            case CMD_CLEAR_NOTE when hit.Fence != null:
+                hit.Fence.NoteText = null;
+                _saveConfig();
+                _requestRedraw();
                 break;
             case CMD_REMOVE_SHORTCUT when hit.Fence != null && hit.ShortcutIndex >= 0:
                 var removedSc = hit.Fence.Shortcuts[hit.ShortcutIndex];
@@ -584,6 +598,17 @@ internal sealed class InputHandler
             };
             LoadShortcutIcon(sc);
             fence.Shortcuts.Add(sc);
+            _saveConfig();
+            _requestRedraw();
+        }
+    }
+
+    private void EditFenceNote(FenceData fence)
+    {
+        var note = NoteEditDialog.Show(_hwnd, "Edit Note — " + fence.Title, fence.NoteText);
+        if (note != null)
+        {
+            fence.NoteText = string.IsNullOrWhiteSpace(note) ? null : note;
             _saveConfig();
             _requestRedraw();
         }
